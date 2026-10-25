@@ -1,0 +1,809 @@
+<title>Gatita negra pixel art</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@500;700&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<style>
+/* Layout: una columna; escenario arriba, loops por estado, luego la hoja de frames con grilla. */
+:root {
+  --bg: #f3f1f7; --fg: #23212b; --muted: #6b6779; --line: #d9d5e3;
+  --stage: #e4eee9; --floor: #b9ccc2; --cell: #ffffff; --accent: #6c4fd1; --accent-fg: #ffffff;
+  --display: "Pixelify Sans", ui-monospace, monospace;
+  --body: "Atkinson Hyperlegible", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #17151d; --fg: #ece9f4; --muted: #a39fb3; --line: #34303f;
+  --stage: #cfdcd5; --floor: #a3b8ad; --cell: #e9e6ef; --accent: #a58ef5; --accent-fg: #17151d; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #17151d; --fg: #ece9f4; --muted: #a39fb3; --line: #34303f;
+  --stage: #cfdcd5; --floor: #a3b8ad; --cell: #e9e6ef; --accent: #a58ef5; --accent-fg: #17151d; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.5; }
+main { max-width: 960px; margin: 0 auto; padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 36px; }
+h1, h2 { font-family: var(--display); font-weight: 700; margin: 0; text-wrap: balance; }
+h1 { font-size: 2.1rem; }
+h2 { font-size: 1.35rem; }
+p { margin: 0; max-width: 65ch; color: var(--muted); }
+section { display: flex; flex-direction: column; gap: 14px; }
+.stage { position: relative; height: 230px; background: var(--stage); border-radius: 6px; overflow: hidden;
+  border-bottom: 18px solid var(--floor); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button { font-family: var(--display); font-size: 1rem; padding: 8px 14px; border: 2px solid var(--fg);
+  background: var(--bg); color: var(--fg); border-radius: 4px; cursor: pointer; box-shadow: 3px 3px 0 var(--fg); }
+button:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--fg); }
+button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.state { font-family: var(--display); color: var(--muted); margin-left: auto; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+figure { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+figure canvas { width: 100%; height: auto; background: var(--cell); border: 1px solid var(--line); border-radius: 4px; image-rendering: pixelated; }
+figcaption { font-family: var(--display); font-size: .95rem; }
+figcaption small { font-family: var(--body); color: var(--muted); font-size: .8rem; margin-left: 6px; }
+.loops canvas { background: var(--stage); }
+</style>
+
+<main>
+  <header style="display:flex;flex-direction:column;gap:8px">
+    <h1>Gatita negra</h1>
+    <p>Vista previa de los sprites antes de armar la librería. Cada frame mide 32×22 píxeles y es toda negra, con ojos verdes. Haz click sobre la gatita para que maúlle.</p>
+  </header>
+
+  <section>
+    <h2>Escenario</h2>
+    <div class="stage" id="stage"></div>
+    <div class="controls">
+      <button id="b-sit">Sentarse</button>
+      <button id="b-walk">Caminar</button>
+      <button id="b-sleep">Dormir</button>
+      <button id="b-auto" aria-pressed="false">Modo libre</button>
+      <span class="state" id="state"></span>
+    </div>
+  </section>
+
+  <section class="loops">
+    <h2>Animaciones</h2>
+    <p>Cada estado en bucle, a escala real de la grilla.</p>
+    <div class="grid" id="loops"></div>
+  </section>
+
+  <section>
+    <h2>Todos los frames</h2>
+    <p>Con la grilla de píxeles visible para revisar proporciones.</p>
+    <div class="grid" id="sheet"></div>
+  </section>
+</main>
+
+<script type="module">
+const pets = new Map();
+
+// Registra una definición de mascota (ver src/pets/black-cat.js como ejemplo).
+function registerPet(def) {
+  if (!def || !def.name) throw new Error('pixel-pets: la definición necesita un "name"');
+  for (const [name, seq] of Object.entries(def.animations)) {
+    for (const [frame] of seq) {
+      if (!def.frames[frame]) throw new Error(`pixel-pets: "${def.name}.${name}" usa el frame inexistente "${frame}"`);
+    }
+  }
+  pets.set(def.name, def);
+  return def;
+}
+
+function getPet(name) {
+  const def = pets.get(name);
+  if (!def) throw new Error(`pixel-pets: no hay mascota registrada con el nombre "${name}"`);
+  return def;
+}
+
+function listPets() {
+  return [...pets.keys()];
+}
+
+// Convierte una grilla de caracteres en un canvas a escala 1:1.
+function rasterize(rows, palette, overrides = {}) {
+  const h = rows.length;
+  const w = rows[0].length;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const ch = rows[y][x];
+      if (ch === '.' || ch === ' ') continue;
+      ctx.fillStyle = overrides[ch] ?? palette[ch] ?? '#f0f';
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+  return canvas;
+}
+
+const Z_GLYPH = ['###', '.#.', '###'];
+
+// Gata negra: silueta redondeada, orejitas puntiagudas y ojos verdes.
+// Cada frame es una grilla de 32x22. Caracteres: '.' transparente, ver la paleta.
+// Los frames se generan con tools/gen_cat2.py, pero se pueden editar a mano aquí.
+
+const blackCat = {
+  name: 'black-cat',
+  width: 32,
+  height: 22,
+  palette: {
+    '#': '#1c1b1f', // cuerpo
+    'g': '#b9d77e', // ojos: brillo
+    'h': '#7aa34f', // ojos: parte baja
+    'p': '#e08fa0', // piel rosa dentro de las orejas
+    'd': '#544f5e', // patas del lado lejano al caminar
+    'e': '#6e6a78', // ojos cerrados
+  },
+  frames: {
+    sit: [
+      '................................',
+      '........#.....#.................',
+      '.......#p#...#p#................',
+      '.......#########................',
+      '......###########...............',
+      '......###########...............',
+      '.....#############..............',
+      '.....###g#####g###..............',
+      '.....###h#####h###..............',
+      '....###############.............',
+      '....###############.............',
+      '....###############.............',
+      '....###############.............',
+      '...#################............',
+      '...#################............',
+      '...#################............',
+      '...#################............',
+      '...#################............',
+      '...#################............',
+      '...#########################....',
+      '....#########################...',
+      '.....#######################....',
+    ],
+    sitBlink: [
+      '................................',
+      '........#.....#.................',
+      '.......#p#...#p#................',
+      '.......#########................',
+      '......###########...............',
+      '......###########...............',
+      '.....#############..............',
+      '.....#############..............',
+      '.....###h#####h###..............',
+      '....###############.............',
+      '....###############.............',
+      '....###############.............',
+      '....###############.............',
+      '...#################............',
+      '...#################............',
+      '...#################............',
+      '...#################............',
+      '...#################............',
+      '...#################............',
+      '...#########################....',
+      '....#########################...',
+      '.....#######################....',
+    ],
+    sitTail: [
+      '................................',
+      '........#.....#.................',
+      '.......#p#...#p#................',
+      '.......#########................',
+      '......###########...............',
+      '......###########...............',
+      '.....#############..............',
+      '.....###g#####g###..............',
+      '.....###h#####h###..............',
+      '....###############.............',
+      '....###############.............',
+      '....###############.............',
+      '....###############.............',
+      '...#################............',
+      '...#################............',
+      '...#################............',
+      '...#################............',
+      '...#################............',
+      '...#################.......#....',
+      '...#########################....',
+      '....########################....',
+      '.....#######################....',
+    ],
+    walk1: [
+      '................................',
+      '................................',
+      '................................',
+      '....###.............#.....#.....',
+      '...###.............#p#...#p#....',
+      '...###.............#########....',
+      '...###............###########...',
+      '...###............###########...',
+      '...###...........#############..',
+      '....###..........####g####g###..',
+      '.....################h####h###..',
+      '......#######################...',
+      '......######################....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '.......###################......',
+      '........##..dd.......##dd.......',
+      '........##..dd.........dd.......',
+    ],
+    walk2: [
+      '................................',
+      '................................',
+      '...###..............#.....#.....',
+      '...###.............#p#...#p#....',
+      '...###.............#########....',
+      '...###............###########...',
+      '...###............###########...',
+      '...###...........#############..',
+      '....###..........####g####g###..',
+      '.....################h####h###..',
+      '......#######################...',
+      '......######################....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '.......###################......',
+      '........##..dd.......##dd.......',
+      '........##..dd.......##dd.......',
+      '............dd.........dd.......',
+    ],
+    walk3: [
+      '................................',
+      '................................',
+      '..###...............#.....#.....',
+      '..###..............#p#...#p#....',
+      '..###..............#########....',
+      '...###............###########...',
+      '...###............###########...',
+      '...###...........#############..',
+      '....###..........####g####g###..',
+      '.....################h####h###..',
+      '......#######################...',
+      '......######################....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '.......###################......',
+      '.........##dd.........##........',
+      '.........##dd.........##........',
+      '...........dd.........##........',
+    ],
+    walk4: [
+      '................................',
+      '................................',
+      '................................',
+      '.###................#.....#.....',
+      '.###...............#p#...#p#....',
+      '..###..............#########....',
+      '..###.............###########...',
+      '..###.............###########...',
+      '...###...........#############..',
+      '....###..........####g####g###..',
+      '.....################h####h###..',
+      '......#######################...',
+      '......######################....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '.......###################......',
+      '.........##dd.........##........',
+      '...........dd.........##........',
+    ],
+    walk5: [
+      '................................',
+      '................................',
+      '................................',
+      '.###................#.....#.....',
+      '.###...............#p#...#p#....',
+      '..###..............#########....',
+      '..###.............###########...',
+      '..###.............###########...',
+      '...###...........#############..',
+      '....###..........####g####g###..',
+      '.....################h####h###..',
+      '......#######################...',
+      '......######################....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '.......###################......',
+      '..........##.........##dd.......',
+      '..........##.........##.........',
+    ],
+    walk6: [
+      '................................',
+      '................................',
+      '..###...............#.....#.....',
+      '..###..............#p#...#p#....',
+      '..###..............#########....',
+      '...###............###########...',
+      '...###............###########...',
+      '...###...........#############..',
+      '....###..........####g####g###..',
+      '.....################h####h###..',
+      '......#######################...',
+      '......######################....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '.......###################......',
+      '..........##.........##dd.......',
+      '..........##.........##dd.......',
+      '..........##.........##.........',
+    ],
+    walk7: [
+      '................................',
+      '................................',
+      '...###..............#.....#.....',
+      '...###.............#p#...#p#....',
+      '...###.............#########....',
+      '...###............###########...',
+      '...###............###########...',
+      '...###...........#############..',
+      '....###..........####g####g###..',
+      '.....################h####h###..',
+      '......#######################...',
+      '......######################....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '.......###################......',
+      '.........##dd.......##..dd......',
+      '.........##dd.......##..dd......',
+      '.........##.........##..dd......',
+    ],
+    walk8: [
+      '................................',
+      '................................',
+      '................................',
+      '....###.............#.....#.....',
+      '...###.............#p#...#p#....',
+      '...###.............#########....',
+      '...###............###########...',
+      '...###............###########...',
+      '...###...........#############..',
+      '....###..........####g####g###..',
+      '.....################h####h###..',
+      '......#######################...',
+      '......######################....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '......#####################.....',
+      '.......###################......',
+      '.........##dd.......##..dd......',
+      '.........##.............dd......',
+    ],
+    sleep1: [
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '..................#.....#.......',
+      '.................#p#...#p#......',
+      '.........######..#########......',
+      '......#####################.....',
+      '....########################....',
+      '...#########################....',
+      '..#################ee###ee##....',
+      '..##########################....',
+      '.###########################....',
+      '.###########################....',
+      '.##########################.....',
+      '##########################......',
+    ],
+    sleep2: [
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '..................#.....#.......',
+      '.................#p#...#p#......',
+      '.........######..#########......',
+      '......#####################.....',
+      '....########################....',
+      '...#########################....',
+      '..#################ee###ee##....',
+      '.###########################....',
+      '.###########################....',
+      '.##########################.....',
+      '##########################......',
+    ],
+    sleepEar: [
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '..................#.............',
+      '.................#p#....##......',
+      '.........######..#########......',
+      '......#####################.....',
+      '....########################....',
+      '...#########################....',
+      '..#################ee###ee##....',
+      '..##########################....',
+      '.###########################....',
+      '.###########################....',
+      '.##########################.....',
+      '##########################......',
+    ],
+  },
+  // Cada animación es una secuencia de [frame, duración en ms].
+  animations: {
+    sit: [['sit', 1800], ['sitBlink', 150], ['sit', 1200], ['sitTail', 300], ['sit', 250], ['sitTail', 300]],
+    walk: [1, 2, 3, 4, 5, 6, 7, 8].map((n) => [`walk${n}`, 95]),
+    sleep: [['sleep1', 1400], ['sleep2', 1400], ['sleep1', 1400], ['sleep2', 1400], ['sleep1', 600], ['sleepEar', 160], ['sleep1', 120], ['sleepEar', 160], ['sleep1', 800], ['sleep2', 1400]],
+  },
+  // Punto del sprite donde salen las "Z" al dormir y el globo de diálogo.
+  anchors: {
+    sleepZ: [22, 4],
+    bubble: [11, 0],
+  },
+  walkSpeed: 6, // píxeles del sprite por segundo (coincide con el avance de las patas)
+};
+
+
+const DEFAULTS = {
+  scale: 4,          // tamaño de cada píxel del sprite en px de pantalla
+  x: null,           // posición horizontal inicial en px (por defecto: centro)
+  bottom: 0,         // distancia al borde inferior del contenedor en px
+  facing: 'right',
+  state: 'sit',
+  autoplay: false,   // comportamiento autónomo
+  interactive: true, // click: maúlla / despierta
+  colors: {},        // reemplazos de la paleta, p. ej. { 'o': '#ffd34d' }
+  zIndex: 10,
+};
+
+class Pet {
+  constructor(type, container, options = {}) {
+    this.def = getPet(type);
+    this.container = container;
+    this.opts = { ...DEFAULTS, ...options };
+    this.scale = this.opts.scale;
+    this.facing = this.opts.facing;
+    this.state = null;
+    this._listeners = {};
+    this._frames = {};
+    for (const [name, rows] of Object.entries(this.def.frames)) {
+      this._frames[name] = rasterize(rows, this.def.palette, this.opts.colors);
+    }
+    this._zColor = this.opts.colors.z ?? this.def.palette.z ?? '#8a93b8';
+    this._zGlyph = rasterize(Z_GLYPH, { '#': this._zColor });
+    this._mount();
+    this.x = this.opts.x ?? Math.max(0, (this._bounds() - this.width) / 2);
+    this._last = performance.now();
+    this._raf = requestAnimationFrame((t) => this._tick(t));
+    this._setState(this.opts.state);
+    if (this.opts.autoplay) this.autoplay(true);
+  }
+
+  get width() { return this.def.width * this.scale; }
+  get height() { return this.def.height * this.scale; }
+
+  // ---- Comandos -----------------------------------------------------------
+
+  sit() { this._setState('sit'); return Promise.resolve(this); }
+
+  sleep() { this._setState('sleep'); return Promise.resolve(this); }
+
+  wake() { return this.state === 'sleep' ? this.sit() : Promise.resolve(this); }
+
+  // walk()               deambula y rebota en los bordes
+  // walk('left'|'right') camina en esa dirección
+  // walk({ to: 120 })    camina hasta x = 120 px y se sienta (la promesa resuelve al llegar)
+  walk(arg) {
+    const target = typeof arg === 'object' && arg !== null ? arg.to : null;
+    if (typeof arg === 'string') this.face(arg);
+    this._resolveWalk?.(this);
+    this._walkTarget = target == null ? null : this._clamp(target);
+    if (this._walkTarget != null && this._walkTarget !== this.x) {
+      this.face(this._walkTarget < this.x ? 'left' : 'right');
+    }
+    this._setState('walk');
+    if (this._walkTarget == null) return Promise.resolve(this);
+    return new Promise((resolve) => { this._resolveWalk = resolve; });
+  }
+
+  walkTo(x) { return this.walk({ to: x }); }
+
+  face(dir) {
+    if (dir === 'left' || dir === 'right') this.facing = dir;
+    return this;
+  }
+
+  say(text, ms = 1800) {
+    clearTimeout(this._bubbleTimer);
+    this.bubble.textContent = text;
+    this.bubble.style.display = 'block';
+    this._bubbleTimer = setTimeout(() => { this.bubble.style.display = 'none'; }, ms);
+    return this;
+  }
+
+  autoplay(on = true) {
+    clearTimeout(this._autoTimer);
+    this._auto = on;
+    if (on) this._scheduleAuto(1500);
+    return this;
+  }
+
+  on(event, fn) {
+    (this._listeners[event] ??= new Set()).add(fn);
+    return () => this._listeners[event].delete(fn);
+  }
+
+  destroy() {
+    cancelAnimationFrame(this._raf);
+    clearTimeout(this._autoTimer);
+    clearTimeout(this._bubbleTimer);
+    this._ro?.disconnect();
+    this.el.remove();
+  }
+
+  // ---- Internos -----------------------------------------------------------
+
+  _emit(event, data) {
+    this._listeners[event]?.forEach((fn) => fn(data, this));
+  }
+
+  _mount() {
+    if (getComputedStyle(this.container).position === 'static') {
+      this.container.style.position = 'relative';
+    }
+    const el = document.createElement('div');
+    el.className = `pixel-pet pixel-pet--${this.def.name}`;
+    Object.assign(el.style, {
+      position: 'absolute', left: '0', bottom: `${this.opts.bottom}px`,
+      width: `${this.width}px`, height: `${this.height}px`,
+      zIndex: String(this.opts.zIndex), cursor: this.opts.interactive ? 'pointer' : '',
+      userSelect: 'none', willChange: 'transform',
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = this.width;
+    canvas.height = this.height;
+    canvas.style.display = 'block';
+    canvas.style.imageRendering = 'pixelated';
+    this.ctx = canvas.getContext('2d');
+    this.ctx.imageSmoothingEnabled = false;
+
+    const bubble = document.createElement('div');
+    bubble.className = 'pixel-pet__bubble';
+    Object.assign(bubble.style, {
+      position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)',
+      display: 'none', whiteSpace: 'nowrap', marginBottom: '6px',
+      padding: `${this.scale}px ${this.scale * 2}px`,
+      font: `bold ${Math.max(12, this.scale * 3)}px ui-monospace, "Courier New", monospace`,
+      background: '#fff', color: '#1f1f1f', border: `${Math.max(2, this.scale / 2)}px solid #1f1f1f`,
+      borderRadius: `${this.scale}px`, letterSpacing: '1px',
+    });
+    el.append(bubble, canvas);
+    this.container.appendChild(el);
+    this.el = el;
+    this.canvas = canvas;
+    this.bubble = bubble;
+
+    el.addEventListener('click', (e) => {
+      this._emit('click', e);
+      if (!this.opts.interactive) return;
+      if (this.state === 'sleep') { this.sit(); this.say('mrr?'); }
+      else this.say('MEOW!');
+    });
+
+    if ('ResizeObserver' in window) {
+      this._ro = new ResizeObserver(() => { this.x = this._clamp(this.x); });
+      this._ro.observe(this.container);
+    }
+  }
+
+  _bounds() { return this.container.clientWidth; }
+
+  _clamp(x) { return Math.min(Math.max(0, x), Math.max(0, this._bounds() - this.width)); }
+
+  _setState(state) {
+    if (state !== 'walk') { this._resolveWalk?.(this); this._resolveWalk = null; this._walkTarget = null; }
+    if (state !== 'sleep') this._zs = [];
+    const prev = this.state;
+    this.state = state;
+    this._animT = 0;
+    this._zTimer = 0;
+    if (prev !== state) this._emit('statechange', { from: prev, to: state });
+  }
+
+  _scheduleAuto(delay) {
+    this._autoTimer = setTimeout(() => {
+      if (!this._auto) return;
+      const r = Math.random();
+      if (this.state === 'sleep') {
+        if (r < 0.35) this.sit();
+      } else if (this.state === 'sit') {
+        if (r < 0.45) this.walkTo(Math.random() * (this._bounds() - this.width));
+        else if (r < 0.65) this.sleep();
+      }
+      this._scheduleAuto(2500 + Math.random() * 4000);
+    }, delay);
+  }
+
+  _currentFrame() {
+    const anims = this.def.animations;
+    const seq = anims[this.state];
+    const total = seq.reduce((s, [, d]) => s + d, 0);
+    let t = this._animT % total;
+    for (const [frame, d] of seq) {
+      if (t < d) return frame;
+      t -= d;
+    }
+    return seq[0][0];
+  }
+
+  _tick(now) {
+    const dt = Math.min(100, now - this._last);
+    this._last = now;
+    this._animT += dt;
+    const step = this.def.walkSpeed * this.scale * (dt / 1000);
+    const dir = this.facing === 'right' ? 1 : -1;
+
+    if (this.state === 'walk') {
+      if (this._walkTarget != null) {
+        const remaining = this._walkTarget - this.x;
+        if (Math.abs(remaining) <= step) {
+          this.x = this._walkTarget;
+          const resolve = this._resolveWalk;
+          this._resolveWalk = null;
+          this._setState('sit');
+          resolve?.(this);
+        } else {
+          this.x += Math.sign(remaining) * step;
+        }
+      } else {
+        const next = this.x + dir * step;
+        const max = Math.max(0, this._bounds() - this.width);
+        if (next <= 0 || next >= max) this.face(dir > 0 ? 'left' : 'right');
+        this.x = Math.min(Math.max(0, next), max);
+      }
+    } else if (this.state === 'sleep') {
+      this._zTimer += dt;
+      if (this._zTimer > 900) {
+        this._zTimer = 0;
+        this._zs.push({ age: 0 });
+      }
+      for (const z of this._zs) z.age += dt;
+      this._zs = this._zs.filter((z) => z.age < 2400);
+    }
+
+    this._draw();
+    this.el.style.transform = `translate(${Math.round(this.x)}px, 0px)`;
+    this._raf = requestAnimationFrame((t) => this._tick(t));
+  }
+
+  _draw() {
+    const { ctx, scale } = this;
+    ctx.clearRect(0, 0, this.width, this.height);
+    ctx.save();
+    if (this.facing === 'left') {
+      ctx.translate(this.width, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(this._frames[this._currentFrame()], 0, 0, this.width, this.height);
+    ctx.restore();
+
+    if (this.state === 'sleep' && this._zs.length) {
+      const [ax, ay] = this.def.anchors?.sleepZ ?? [this.def.width / 2, 4];
+      for (const z of this._zs) {
+        const p = z.age / 2400;
+        let px = Math.round(ax + p * 6 + Math.sin(p * 6) * 1);
+        const py = Math.round(ay - p * 6);
+        if (this.facing === 'left') px = this.def.width - px - 3;
+        ctx.globalAlpha = p < 0.2 ? p / 0.2 : 1 - (p - 0.2) / 0.8;
+        ctx.drawImage(this._zGlyph, px * scale, py * scale, 3 * scale, 3 * scale);
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+registerPet(blackCat);
+
+const def = blackCat;
+const stage = document.getElementById('stage');
+const cat = new Pet('black-cat', stage, { scale: 6, bottom: 0 });
+const stateEl = document.getElementById('state');
+const names = { sit: 'sentada', walk: 'caminando', sleep: 'durmiendo' };
+const show = () => { stateEl.textContent = 'Estado: ' + names[cat.state]; };
+cat.on('statechange', show); show();
+document.getElementById('b-sit').onclick = () => cat.sit();
+document.getElementById('b-walk').onclick = () => cat.walk();
+document.getElementById('b-sleep').onclick = () => cat.sleep();
+const auto = document.getElementById('b-auto');
+auto.onclick = () => { const on = auto.getAttribute('aria-pressed') !== 'true'; auto.setAttribute('aria-pressed', on); cat.autoplay(on); };
+
+// Loops por estado
+const S = 8;
+const loopDefs = [
+  ['sit', 'Sentada', def.animations.sit],
+  ['walk', 'Caminar', def.animations.walk],
+  ['sleep', 'Dormir', def.animations.sleep],
+];
+const sprites = {};
+for (const [n, rows] of Object.entries(def.frames)) sprites[n] = rasterize(rows, def.palette);
+const loops = [];
+for (const [key, label, seq] of loopDefs) {
+  const fig = document.createElement('figure');
+  const c = document.createElement('canvas'); c.width = def.width * S; c.height = def.height * S;
+  const cap = document.createElement('figcaption'); cap.textContent = label;
+  const sm = document.createElement('small'); sm.textContent = seq.map(([f]) => f).filter((f, i, a) => a.indexOf(f) === i).join(' · ');
+  cap.append(sm); fig.append(c, cap); document.getElementById('loops').append(fig);
+  const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = false;
+  loops.push({ ctx, seq, total: seq.reduce((s, [, d]) => s + d, 0), key });
+}
+function frameAt(seq, total, t) { t %= total; for (const [f, d] of seq) { if (t < d) return [f, t, d]; t -= d; } return [seq[0][0], 0, 1]; }
+const t0 = performance.now();
+(function loop(now) {
+  for (const l of loops) {
+    const [f, t, d] = frameAt(l.seq, l.total, now - t0);
+    l.ctx.clearRect(0, 0, l.ctx.canvas.width, l.ctx.canvas.height);
+    let dy = 0;
+    l.ctx.drawImage(sprites[f], 0, -dy, def.width * S, def.height * S);
+  }
+  requestAnimationFrame(loop);
+})(t0);
+
+// Hoja de frames con grilla
+const labels = { sit: 'sentada', sitBlink: 'parpadeo', sitTail: 'cola arriba', walk1: 'paso 1', walk2: 'paso 2', walk3: 'paso 3', walk4: 'paso 4', walk5: 'paso 5', walk6: 'paso 6', walk7: 'paso 7', walk8: 'paso 8', sleepEar: 'mueve la oreja', sleep1: 'enrollada', sleep2: 'respira' };
+const G = 10;
+for (const [n, rows] of Object.entries(def.frames)) {
+  const fig = document.createElement('figure');
+  const c = document.createElement('canvas'); c.width = def.width * G; c.height = def.height * G;
+  const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(sprites[n], 0, 0, c.width, c.height);
+  ctx.strokeStyle = 'rgba(120,110,150,.22)'; ctx.lineWidth = 1;
+  for (let x = 0; x <= def.width; x++) { ctx.beginPath(); ctx.moveTo(x * G + .5, 0); ctx.lineTo(x * G + .5, c.height); ctx.stroke(); }
+  for (let y = 0; y <= def.height; y++) { ctx.beginPath(); ctx.moveTo(0, y * G + .5); ctx.lineTo(c.width, y * G + .5); ctx.stroke(); }
+  const cap = document.createElement('figcaption'); cap.textContent = labels[n] ?? n;
+  const sm = document.createElement('small'); sm.textContent = n; cap.append(sm);
+  fig.append(c, cap); document.getElementById('sheet').append(fig);
+}
+</script>

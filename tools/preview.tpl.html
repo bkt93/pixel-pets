@@ -1,0 +1,136 @@
+<title>Gatita negra pixel art</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@500;700&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<style>
+/* Layout: una columna; escenario arriba, loops por estado, luego la hoja de frames con grilla. */
+:root {
+  --bg: #f3f1f7; --fg: #23212b; --muted: #6b6779; --line: #d9d5e3;
+  --stage: #e4eee9; --floor: #b9ccc2; --cell: #ffffff; --accent: #6c4fd1; --accent-fg: #ffffff;
+  --display: "Pixelify Sans", ui-monospace, monospace;
+  --body: "Atkinson Hyperlegible", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #17151d; --fg: #ece9f4; --muted: #a39fb3; --line: #34303f;
+  --stage: #cfdcd5; --floor: #a3b8ad; --cell: #e9e6ef; --accent: #a58ef5; --accent-fg: #17151d; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #17151d; --fg: #ece9f4; --muted: #a39fb3; --line: #34303f;
+  --stage: #cfdcd5; --floor: #a3b8ad; --cell: #e9e6ef; --accent: #a58ef5; --accent-fg: #17151d; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.5; }
+main { max-width: 960px; margin: 0 auto; padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 36px; }
+h1, h2 { font-family: var(--display); font-weight: 700; margin: 0; text-wrap: balance; }
+h1 { font-size: 2.1rem; }
+h2 { font-size: 1.35rem; }
+p { margin: 0; max-width: 65ch; color: var(--muted); }
+section { display: flex; flex-direction: column; gap: 14px; }
+.stage { position: relative; height: 230px; background: var(--stage); border-radius: 6px; overflow: hidden;
+  border-bottom: 18px solid var(--floor); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button { font-family: var(--display); font-size: 1rem; padding: 8px 14px; border: 2px solid var(--fg);
+  background: var(--bg); color: var(--fg); border-radius: 4px; cursor: pointer; box-shadow: 3px 3px 0 var(--fg); }
+button:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--fg); }
+button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.state { font-family: var(--display); color: var(--muted); margin-left: auto; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+figure { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+figure canvas { width: 100%; height: auto; background: var(--cell); border: 1px solid var(--line); border-radius: 4px; image-rendering: pixelated; }
+figcaption { font-family: var(--display); font-size: .95rem; }
+figcaption small { font-family: var(--body); color: var(--muted); font-size: .8rem; margin-left: 6px; }
+.loops canvas { background: var(--stage); }
+</style>
+
+<main>
+  <header style="display:flex;flex-direction:column;gap:8px">
+    <h1>Gatita negra</h1>
+    <p>Vista previa de los sprites antes de armar la librería. Cada frame mide 32×22 píxeles y es toda negra, con ojos verdes. Haz click sobre la gatita para que maúlle.</p>
+  </header>
+
+  <section>
+    <h2>Escenario</h2>
+    <div class="stage" id="stage"></div>
+    <div class="controls">
+      <button id="b-sit">Sentarse</button>
+      <button id="b-walk">Caminar</button>
+      <button id="b-sleep">Dormir</button>
+      <button id="b-auto" aria-pressed="false">Modo libre</button>
+      <span class="state" id="state"></span>
+    </div>
+  </section>
+
+  <section class="loops">
+    <h2>Animaciones</h2>
+    <p>Cada estado en bucle, a escala real de la grilla.</p>
+    <div class="grid" id="loops"></div>
+  </section>
+
+  <section>
+    <h2>Todos los frames</h2>
+    <p>Con la grilla de píxeles visible para revisar proporciones.</p>
+    <div class="grid" id="sheet"></div>
+  </section>
+</main>
+
+<script type="module">
+/*BUNDLE*/
+const def = blackCat;
+const stage = document.getElementById('stage');
+const cat = new Pet('black-cat', stage, { scale: 6, bottom: 0 });
+const stateEl = document.getElementById('state');
+const names = { sit: 'sentada', walk: 'caminando', sleep: 'durmiendo' };
+const show = () => { stateEl.textContent = 'Estado: ' + names[cat.state]; };
+cat.on('statechange', show); show();
+document.getElementById('b-sit').onclick = () => cat.sit();
+document.getElementById('b-walk').onclick = () => cat.walk();
+document.getElementById('b-sleep').onclick = () => cat.sleep();
+const auto = document.getElementById('b-auto');
+auto.onclick = () => { const on = auto.getAttribute('aria-pressed') !== 'true'; auto.setAttribute('aria-pressed', on); cat.autoplay(on); };
+
+// Loops por estado
+const S = 8;
+const loopDefs = [
+  ['sit', 'Sentada', def.animations.sit],
+  ['walk', 'Caminar', def.animations.walk],
+  ['sleep', 'Dormir', def.animations.sleep],
+];
+const sprites = {};
+for (const [n, rows] of Object.entries(def.frames)) sprites[n] = rasterize(rows, def.palette);
+const loops = [];
+for (const [key, label, seq] of loopDefs) {
+  const fig = document.createElement('figure');
+  const c = document.createElement('canvas'); c.width = def.width * S; c.height = def.height * S;
+  const cap = document.createElement('figcaption'); cap.textContent = label;
+  const sm = document.createElement('small'); sm.textContent = seq.map(([f]) => f).filter((f, i, a) => a.indexOf(f) === i).join(' · ');
+  cap.append(sm); fig.append(c, cap); document.getElementById('loops').append(fig);
+  const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = false;
+  loops.push({ ctx, seq, total: seq.reduce((s, [, d]) => s + d, 0), key });
+}
+function frameAt(seq, total, t) { t %= total; for (const [f, d] of seq) { if (t < d) return [f, t, d]; t -= d; } return [seq[0][0], 0, 1]; }
+const t0 = performance.now();
+(function loop(now) {
+  for (const l of loops) {
+    const [f, t, d] = frameAt(l.seq, l.total, now - t0);
+    l.ctx.clearRect(0, 0, l.ctx.canvas.width, l.ctx.canvas.height);
+    let dy = 0;
+    l.ctx.drawImage(sprites[f], 0, -dy, def.width * S, def.height * S);
+  }
+  requestAnimationFrame(loop);
+})(t0);
+
+// Hoja de frames con grilla
+const labels = { sit: 'sentada', sitBlink: 'parpadeo', sitTail: 'cola arriba', walk1: 'paso 1', walk2: 'paso 2', walk3: 'paso 3', walk4: 'paso 4', walk5: 'paso 5', walk6: 'paso 6', walk7: 'paso 7', walk8: 'paso 8', sleepEar: 'mueve la oreja', sleep1: 'enrollada', sleep2: 'respira' };
+const G = 10;
+for (const [n, rows] of Object.entries(def.frames)) {
+  const fig = document.createElement('figure');
+  const c = document.createElement('canvas'); c.width = def.width * G; c.height = def.height * G;
+  const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(sprites[n], 0, 0, c.width, c.height);
+  ctx.strokeStyle = 'rgba(120,110,150,.22)'; ctx.lineWidth = 1;
+  for (let x = 0; x <= def.width; x++) { ctx.beginPath(); ctx.moveTo(x * G + .5, 0); ctx.lineTo(x * G + .5, c.height); ctx.stroke(); }
+  for (let y = 0; y <= def.height; y++) { ctx.beginPath(); ctx.moveTo(0, y * G + .5); ctx.lineTo(c.width, y * G + .5); ctx.stroke(); }
+  const cap = document.createElement('figcaption'); cap.textContent = labels[n] ?? n;
+  const sm = document.createElement('small'); sm.textContent = n; cap.append(sm);
+  fig.append(c, cap); document.getElementById('sheet').append(fig);
+}
+</script>
